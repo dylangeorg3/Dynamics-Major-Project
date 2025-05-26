@@ -1,0 +1,180 @@
+# Rewriting the user's provided code into a single complete block.
+
+import numpy as np
+import sympy as sp
+from sympy.physics.mechanics import dynamicsymbols
+import matplotlib.pyplot as plt
+from scipy.integrate import solve_ivp
+import scipy.optimize as opt
+from matplotlib.animation import FuncAnimation
+from IPython.display import HTML
+
+# --- PARAMETERS ---
+m1, m2, m3 = 1.0, 1.0, 0.5   # masses
+I1, I2     = 0.5, 0.5       # inertias
+L1, L2     = 0.5, 1.5       # crank & rod lengths
+F0         = 50.0           # external force on vertical slider
+k, g       = 1.0, 9.81      # spring & gravity
+
+# --- SYMBOLIC VARIABLES ---
+t = sp.symbols('t')
+x1, y1, th1 = dynamicsymbols('x1 y1 th1')
+x2, y2, th2 = dynamicsymbols('x2 y2 th2')
+x3, y3       = dynamicsymbols('x3 y3')
+x4, y4, th4 = dynamicsymbols('x4 y4 th4')
+x5, y5       = dynamicsymbols('x5 y5')
+x6, y6, th6 = dynamicsymbols('x6 y6 th6')
+x7, y7       = dynamicsymbols('x7 y7')
+
+q  = sp.Matrix([x1,y1,th1,x2,y2,th2,x3,y3,x4,y4,th4,x5,y5,x6,y6,th6,x7,y7])
+dq = q.diff(t)
+
+R = lambda θ: sp.Matrix([[sp.cos(θ), -sp.sin(θ)], [sp.sin(θ),  sp.cos(θ)]])
+î = sp.Matrix([1,0])
+ĵ = sp.Matrix([0,1])
+
+# --- CONSTRAINTS ---
+C = []
+end1 = sp.Matrix([x1,y1]) + R(th1)@sp.Matrix([-L1/2,0])
+C += [end1.dot(î), end1.dot(ĵ)]
+pin = sp.Matrix([x1,y1]) + R(th1)@sp.Matrix([+L1/2,0])
+
+offsets   = [0, sp.pi/2, -sp.pi/2]
+rod_syms  = [(x2,y2,th2),(x4,y4,th4),(x6,y6,th6)]
+sliders   = [(x3,y3),(x5,y5),(x7,y7)]
+axis_fns  = [lambda X,Y: X, lambda X,Y: Y, lambda X,Y: Y]
+
+for (xo,yo,tho), (xs,ys), φ, axis_fn in zip(rod_syms, sliders, offsets, axis_fns):
+    rod_com    = sp.Matrix([xo,yo])
+    rod_start  = rod_com + R(tho)@sp.Matrix([-L2/2,0])
+    C += [(pin - rod_start).dot(î), (pin - rod_start).dot(ĵ)]
+    rod_end    = rod_com + R(tho)@sp.Matrix([+L2/2,0])
+    slider_pt  = sp.Matrix([xs,ys])
+    C += [(rod_end - slider_pt).dot(î), (rod_end - slider_pt).dot(ĵ)]
+    C.append(axis_fn(xs,ys))
+
+C = sp.Matrix(C)
+
+# --- JACOBIANS & DERIVATIVES ---
+J   = C.jacobian(q)
+dC  = J @ dq
+dJ  = dC.jacobian(q)
+
+# --- MASS MATRIX & FORCES ---
+M = np.diag([m1,m1,I1] + [m2,m2,I2, m3,m3]*3)
+W = np.linalg.inv(M)
+
+Qsym = [0, -m1*g, -k*th1.diff(t)]
+for (xo,yo,tho), (xs,ys), _ in zip(rod_syms, sliders, offsets):
+    Qsym += [0, -m2*g, 0]
+    if xs == x3:
+        Qsym += [0, -m3*g + F0*sp.cos(th1)]
+    else:
+        Qsym += [0, -m3*g]
+Q = sp.Matrix(Qsym)
+
+JWJT_fn = sp.lambdify((q,dq), J@W@J.T,      'numpy')
+RHS_fn  = sp.lambdify((q,dq), -dJ@dq - J@W@Q - C - dC, 'numpy')
+J_fn    = sp.lambdify((q,dq), J,            'numpy')
+Q_fn    = sp.lambdify((q,dq), Q,            'numpy')
+dC_fn   = sp.lambdify((q,dq), dC,           'numpy')
+
+# --- INITIAL POSITIONS ---
+θ1_0 = np.pi/2
+x0_pos = np.array([
+    0.0,   L1/2,      θ1_0,
+    0.0,   L1+L2/2,  θ1_0,   0.0,  L1+L2,
+    L1+L2/2, 0.0,    0.0,    L1+L2, 0.0,
+   -(L1+L2/2), 0.0,   np.pi,  -(L1+L2),  0.0
+])
+
+# --- INITIAL VELOCITIES ---
+fixed_dth1 = 0.5
+def make_full_dq(b):
+    dq_full = np.zeros(18)
+    dq_full[0:2] = b[0:2]
+    dq_full[2]   = fixed_dth1
+    dq_full[3:]  = b[2:]
+    return dq_full
+
+def vel_res(b):
+    return np.array(dC_fn(x0_pos, make_full_dq(b))).flatten()
+
+solb = opt.root(vel_res, np.zeros(17))
+if not solb.success:
+    raise RuntimeError("Vel init failed: " + solb.message)
+x0_vel = make_full_dq(solb.x)
+state0  = np.concatenate((x0_pos, x0_vel))
+
+# --- DYNAMICS ---
+def piston_engine(t, state):
+    qv, dqv = state[:18], state[18:]
+    JWJT = JWJT_fn(qv, dqv)
+    RHS  = np.array(RHS_fn(qv, dqv)).flatten()
+    lam  = np.linalg.solve(JWJT, RHS)
+    Jmat = J_fn(qv, dqv)
+    Qhat = Jmat.T.dot(lam)
+    Qvec = np.array(Q_fn(qv, dqv)).flatten()
+    ddq  = W.dot(Qvec + Qhat)
+    return np.concatenate((dqv, ddq))
+
+# --- INTEGRATE & ANIMATE ---
+t_span = (0, 20)
+t_eval = np.linspace(*t_span, 400)
+sol    = solve_ivp(piston_engine, t_span, state0,
+                   method='BDF', t_eval=t_eval,
+                   atol=1e-8, rtol=1e-8)
+
+# --- ANIMATION ---
+fig, ax = plt.subplots()
+ax.set_aspect('equal')
+ax.set_xlim(-3, 3)
+ax.set_ylim(-1, 3)
+
+def rod_endpoints(xc, yc, theta, length):
+    x0 = xc - (length/2)*np.cos(theta)
+    y0 = yc - (length/2)*np.sin(theta)
+    x1 = xc + (length/2)*np.cos(theta)
+    y1 = yc + (length/2)*np.sin(theta)
+    return (x0, x1), (y0, y1)
+
+lines = [ax.plot([], [], lw=3)[0] for _ in range(6)]
+
+Y = sol.y
+
+def init():
+    for line in lines:
+        line.set_data([], [])
+    return lines
+
+def animate(i):
+    x, y, th = Y[0][i], Y[1][i], Y[2][i]
+    xs, ys = rod_endpoints(x, y, th, L1)
+    lines[0].set_data(xs, ys)
+
+    x, y, th = Y[3][i], Y[4][i], Y[5][i]
+    xs, ys = rod_endpoints(x, y, th, L2)
+    lines[1].set_data(xs, ys)
+
+    x, y = Y[6][i], Y[7][i]
+    lines[2].set_data([x, x], [y - 0.1, y + 0.1])
+
+    x, y, th = Y[8][i], Y[9][i], Y[10][i]
+    xs, ys = rod_endpoints(x, y, th, L2)
+    lines[3].set_data(xs, ys)
+
+    x, y = Y[11][i], Y[12][i]
+    lines[4].set_data([x - 0.1, x + 0.1], [y, y])
+
+    x, y, th = Y[13][i], Y[14][i], Y[15][i]
+    xs, ys = rod_endpoints(x, y, th, L2)
+    lines[5].set_data(xs, ys)
+
+    return lines
+
+anim = FuncAnimation(fig, animate, init_func=init,
+                     frames=len(sol.t), interval=50, blit=True)
+#HTML(anim.to_html5_video())
+
+from matplotlib.animation import PillowWriter
+anim.save("spring_piston.gif", writer=PillowWriter(fps=30))
