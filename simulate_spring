@@ -1,0 +1,223 @@
+# Load the necessary libraries
+import numpy as np
+import sympy as sp
+from sympy.physics.mechanics import dynamicsymbols
+import matplotlib.pyplot as plt
+from scipy.integrate import solve_ivp
+import scipy.optimize as opt
+from matplotlib.animation import FuncAnimation, PillowWriter
+from IPython.display import HTML
+
+# Constants
+m1, m2, m3 = 1, 2, 0.5
+L1, L2 = 0.5, 1.5
+I1, I2 = 0.5, 1.5
+F0 = 50
+k = 1
+g = 9.81
+y_top = 2.0   # Spring fixed point at top of frame
+k_s = 80      # Reduced Spring stiffness
+L0 = 0.2      # Natural length of the spring
+
+# Symbols
+t = sp.symbols('t')
+x1, x2, y1, y2, theta1, theta2, x3, y3 = dynamicsymbols('x1 x2 y1 y2 theta1 theta2 x3 y3')
+q = sp.Matrix([x1, y1, theta1, x2, y2, theta2, x3, y3])
+dq = q.diff(t)
+
+# Center of mass locations
+x_com_1 = sp.Matrix([x1, y1])
+x_com_2 = sp.Matrix([x2, y2])
+x_com_3 = sp.Matrix([x3, y3])
+
+# Rotation matrix
+R = lambda theta: sp.Matrix([[sp.cos(theta), -sp.sin(theta)], [sp.sin(theta), sp.cos(theta)]])
+
+# Mass matrix and inverse
+M = np.diag([m1, m1, I1, m2, m2, I2, m3, m3])
+W = np.linalg.inv(M)
+
+# Spring force on piston head
+delta_y = y3 - y_top - L0
+spring_force = -k_s * delta_y
+
+# Generalized forces
+Q = sp.Matrix([
+    0, -m1*g, -k*theta1.diff(t),
+    0, -m2*g, 0,
+    0, -m3*g + F0 * sp.cos(theta1) + spring_force
+])
+
+# Constraints
+i_cap = sp.Matrix([1, 0])
+j_cap = sp.Matrix([0, 1])
+
+constraint_1 = x_com_1 + R(theta1) @ sp.Matrix([-L1/2, 0])
+C1 = constraint_1.dot(i_cap)
+C2 = constraint_1.dot(j_cap)
+
+constraint_2 = x_com_1 - x_com_2 + R(theta1) @ sp.Matrix([L1/2, 0]) - R(theta2) @ sp.Matrix([-L2/2, 0])
+C3 = constraint_2.dot(i_cap)
+C4 = constraint_2.dot(j_cap)
+
+constraint_3 = x_com_2 + R(theta2) @ sp.Matrix([L2/2, 0]) - x_com_3
+C5 = constraint_3.dot(i_cap)
+C6 = constraint_3.dot(j_cap)
+
+constraint_4 = x_com_3[0]
+C7 = constraint_4
+
+C = sp.Matrix([C1, C2, C3, C4, C5, C6, C7])
+
+# Jacobians and derivatives
+J = C.jacobian(q)
+dC = J @ dq
+dJ = dC.jacobian(q)
+
+JWJT = J @ W @ J.T
+RHS = -dJ @ dq - J @ W @ Q - 1 * C - 1 * dC
+
+# Lambdified functions
+JWJT_fn = sp.lambdify((q, dq), JWJT)
+RHS_fn = sp.lambdify((q, dq), RHS)
+C_fn = sp.lambdify((q, dq), C)
+J_fn = sp.lambdify((q, dq), J)
+dC_fn = sp.lambdify((q, dq), dC)
+dJ_fn = sp.lambdify((q, dq), dJ)
+Q_fn = sp.lambdify((q, dq), Q)
+
+# Initial conditions
+dtheta1 = 0.5
+initial_position_body_1 = np.array([0, L1/2, np.pi/2])
+initial_position_body_2 = np.array([0, L1 + L2/2, np.pi/2])
+initial_position_body_3 = np.array([0, L1 + L2])
+initial_velocity_body_1 = np.array([0, 0, dtheta1])
+initial_velocity_body_2 = np.array([0, 0, 0])
+initial_velocity_body_3 = np.array([0, 0])
+x0 = np.concatenate((initial_position_body_1, initial_position_body_2, initial_position_body_3,
+                    initial_velocity_body_1, initial_velocity_body_2, initial_velocity_body_3))
+
+x, _ = np.split(x0, 2)
+def optimiser(b):
+    dx1, dy1, dx2, dy2, dtheta2, dx3, dy3 = b
+    dq = np.array([dx1, dy1, dtheta1, dx2, dy2, dtheta2, dx3, dy3])
+    val = dC_fn(x, dq).flatten()
+    return val
+
+result = opt.root(optimiser, np.zeros(7))
+b = result.x
+dx = np.array([b[0], b[1], dtheta1, b[2], b[3], b[4], b[5], b[6]])
+
+C_val = C_fn(x, dx)
+dC_val = dC_fn(x, dx)
+assert np.allclose(C_val, 0)
+assert np.allclose(dC_val, 0)
+
+x0 = np.concatenate((x, dx))
+
+def piston_engine(t, state):
+    q, dq = np.split(state, 2)
+    lam = np.linalg.solve(JWJT_fn(q, dq), RHS_fn(q, dq))
+    Qhat = J_fn(q, dq).T @ lam
+    ddq = W @ (Q_fn(q, dq) + Qhat)
+    return np.concatenate((dq, ddq.flatten()))
+
+# Solve the system
+t_span = (0, 30)
+t_eval = np.linspace(*t_span, 500)
+sol = solve_ivp(piston_engine, t_span, x0, atol=1e-7, rtol=1e-7, method='BDF', t_eval=t_eval)
+
+# Box class
+class Box:
+    def __init__(self, width, height, color='b'):
+        self.width = width
+        self.height = height
+        self.color = color
+        self.offset = -np.array([width/2, height/2])
+
+    def first_draw(self, ax):
+        self.patch = plt.Rectangle((0,0), 0, 0, angle=0, rotation_point='center', color=self.color, animated=True)
+        ax.add_patch(self.patch)
+        return self.patch
+
+    def set_data(self, x, y, theta):
+        self.x = x
+        self.y = y
+        self.theta = theta
+
+    def update(self, i):
+        x, y, theta = self.x[i], self.y[i], self.theta[i]
+        theta = np.rad2deg(theta)
+        corner = np.array([x, y]) + self.offset
+        self.patch.set_width(self.width)
+        self.patch.set_height(self.height)
+        self.patch.set_xy(corner)
+        self.patch.set_angle(theta)
+        return self.patch
+
+# Zigzag Spring Visual
+class SpringVisual:
+    def __init__(self, x_vals, y_vals, color='k', coils=15, width=0.03):
+        self.x_vals = x_vals
+        self.y_vals = y_vals
+        self.color = color
+        self.coils = coils
+        self.width = width
+
+    def first_draw(self, ax):
+        self.line, = ax.plot([], [], color=self.color, lw=1)
+        return self.line
+
+    def update(self, i):
+        x = self.x_vals[i]
+        y1 = y_top
+        y2 = self.y_vals[i]
+        length = y1 - y2
+        t = np.linspace(0, 1, 2 * self.coils + 1)
+        zigzag_x = x + self.width * np.where(np.arange(len(t)) % 2 == 0, -1, 1)
+        zigzag_y = y1 - t * length
+        self.line.set_data(zigzag_x, zigzag_y)
+        return self.line
+
+# Extract results
+x1, y1, theta1 = sol.y[:3]
+x2, y2, theta2 = sol.y[3:6]
+x3, y3 = sol.y[6:8]
+theta3 = np.zeros_like(x3)
+
+box1 = Box(L1, 0.01, 'b')
+box2 = Box(L2, 0.01, 'r')
+box3 = Box(0.1, 0.3, 'g')
+box1.set_data(x1, y1, theta1)
+box2.set_data(x2, y2, theta2)
+box3.set_data(x3, y3, theta3)
+
+spring = SpringVisual(x3, y3)
+boxes = [box1, box3, box2]
+
+# Plotting
+fig, ax = plt.subplots()
+plt.close()
+ax.set_ylim(-0.6, 2.1)
+ax.set_xlim(-0.6, 0.6)
+ax.set_aspect('equal')
+
+def init():
+    ax.set_title("t=0.00 sec", fontsize=15)
+    for box in boxes:
+        box.first_draw(ax)
+    spring.first_draw(ax)
+    return [box.patch for box in boxes] + [spring.line]
+
+def animate(i):
+    ax.set_title(f"t={sol.t[i]:.2f} sec", fontsize=15)
+    for box in boxes:
+        box.update(i)
+    spring.update(i)
+    return [box.patch for box in boxes] + [spring.line]
+
+dt = sol.t[1] - sol.t[0]
+anim = FuncAnimation(fig, animate, frames=len(sol.t), init_func=init, blit=False, interval=1000*dt)
+
+# Save animation
+anim.save("spring_piston.gif", writer=PillowWriter(fps=30))
