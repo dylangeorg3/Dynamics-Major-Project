@@ -272,8 +272,8 @@ class CoupledPistonSystem:
         self.top_system = TopCrankSlider()
         
         # Angular velocities for driving links
-        self.dtheta1 = 2.0  # Bottom system angular velocity (link 1)
-        self.dtheta4 = -2.0  # Top system angular velocity (link 6, negative for opposite rotation)
+        self.dtheta1 = 5.0  # Bottom system angular velocity (link 1)
+        self.dtheta4 = -5.0  # Top system angular velocity (link 6, negative for opposite rotation)
     
     def calculate_spring_force(self, y3, y4):
         """Calculate spring forces between pistons"""
@@ -305,7 +305,7 @@ class CoupledPistonSystem:
         fixed_height = 4.5
         
         # Start with desired angles that mirror the bottom system
-        theta4_init = 3*np.pi/4  # Link 6 angle (mirror of bottom link 1 at pi/4)
+        theta4_init = np.pi/2  # Link 6 angle (mirror of bottom link 1 at pi/4)
         theta3_init = np.pi/2    # Link 5 angle (same as bottom link 2)
         
         # Link 6 positioning: its right end is fixed at (0, fixed_height)
@@ -531,7 +531,7 @@ if sol.success:
     box5 = Box(L5, 0.02, 'r')       # Link 5
     box6 = Box(L6, 0.02, 'b')       # Link 6
 
-    spring = Spring(n_coils=6, amplitude=0.08, color='orange', linewidth=3)
+    spring = Spring(n_coils=6, amplitude=0.08, color='black', linewidth=3)
 
     # Set animation data
     box1.set_data(x1, y1, theta1)
@@ -576,3 +576,5 @@ else:
     print(f"Simulation failed: {sol.message}")
 
 print("\nProperly mirrored dual piston system simulation complete!")
+
+
