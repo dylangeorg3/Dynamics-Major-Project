@@ -9,16 +9,17 @@ import scipy.optimize as opt
 # System parameters
 # For bottom piston (1 is lowest 6 is highest)
 m1, m2, m3 = 1, 2, 0.5
-L1, L2 = 0.5, 1.5
-I1, I2 = 0.5, 1.5
+L1, L2 = 1, 1
+I1, I2 = 1, 1
 F0 = 50
+LP = 0.5
 k = 1
 g = 9.81
 
 # For top piston
 m4, m5, m6 = 0.5, 2, 1
-L5, L6 = 1.5, 0.5
-I5, I6 = 1.5, 0.5
+L5, L6 = 1, 1
+I5, I6 = 1, 1
 
 # Spring parameters connecting the pistons
 k_spring = 10.0  # Spring stiffness
@@ -293,9 +294,9 @@ class CoupledPistonSystem:
         
         # Top system initial positions
         initial_pos_top = np.array([
-            0, -(L6 + L5) + L6/2,        # Top piston (x4, y4)
-            0, -(L6 + L5/2) + L6/2, 3*np.pi/2,  # Link 5 (x5, y5, theta3)
-            0, 0, 3*np.pi/2              # Link 6 (x6, y6, theta4)
+            0, L1 + L2 + LP,        # Top piston (x4, y4)
+            0, L1 + L2 + LP + L5 /2, np.pi/2,  # Link 5 (x5, y5, theta3)
+            0, L1 + L2 + LP + L5 + L6 /2, np.pi/2              # Link 6 (x6, y6, theta4)
         ])
         
         # Simple initial velocities
@@ -466,7 +467,7 @@ if sol.success:
 
     fig, ax = plt.subplots(figsize=(8, 10))
 
-    ax.set_ylim(-4, 4)
+    ax.set_ylim(-0.6, 4.8)
     ax.set_xlim(-1, 1)
     ax.set_aspect('equal')
     ax.grid(True, alpha=0.3)
