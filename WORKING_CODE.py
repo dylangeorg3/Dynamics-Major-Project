@@ -227,7 +227,7 @@ class TopCrankSlider:
         # Bottom has: F0*cos(theta1) on piston, damping on theta1
         # Top should have: F0*cos(theta4) on piston, damping on theta4 (link 6 is the driving link)
         Q = np.array([
-            0, -F0 * np.cos(q_vals[7]) - m4 * g - spring_force,  # piston 4 with driving force (negative spring force)
+            0, F0 * np.cos(q_vals[7]) - m4 * g - spring_force,  # piston 4 with driving force (negative spring force)
             0, -m5*g, 0,                                         # body 5 (link 5)
             0, -m6*g, -k * dq_vals[7]                           # body 6 with damping on theta4 (driving link)
         ])
@@ -290,46 +290,56 @@ class CoupledPistonSystem:
             spring_force_on_top = spring_force_magnitude       # Upward force on top
         
         return spring_force_on_bottom, spring_force_on_top
-    
+
     def get_initial_conditions(self):
-        """Calculate initial conditions for both systems - PROPERLY MIRRORED VERSION"""
+        """Calculate initial conditions for both systems - FIXED VERSION"""
         
-        # Bottom system initial positions (unchanged)
+        # Bottom system initial positions (unchanged - these work fine)
         initial_pos_bottom = np.array([
             0, L1/2, np.pi/4,        # Link 1 (x1, y1, theta1) - start at 45 degrees
             0, L1 + L2/2, np.pi/2,   # Link 2 (x2, y2, theta2)  
             0, L1 + L2               # Bottom piston (x3, y3)
         ])
         
-        # FIXED: Top system initial positions - properly mirrored
+        # FIXED: Top system initial positions - proper geometric calculation
         fixed_height = 4.5
         
-        # Mirror the bottom system geometry
-        # Bottom has link 1 at pi/4, so top link 6 should be at pi - pi/4 = 3*pi/4
-        theta4_init = 3*np.pi/4  # Mirror angle
-        x6_init = 0
-        y6_init = fixed_height - L6/2  # Link 6 center
+        # Start with desired angles that mirror the bottom system
+        theta4_init = 3*np.pi/4  # Link 6 angle (mirror of bottom link 1 at pi/4)
+        theta3_init = np.pi/2    # Link 5 angle (same as bottom link 2)
         
-        # Link 5 connects to bottom of link 6
-        # Bottom of link 6: x6 + L6/2 * cos(theta4 - pi/2), y6 + L6/2 * sin(theta4 - pi/2)
-        link6_bottom_x = x6_init + (L6/2) * np.cos(theta4_init - np.pi/2)
-        link6_bottom_y = y6_init + (L6/2) * np.sin(theta4_init - np.pi/2)
+        # Link 6 positioning: its right end is fixed at (0, fixed_height)
+        # Link 6 center = fixed_point - (L6/2) * [cos(theta4), sin(theta4)]
+        x6_init = 0 - (L6/2) * np.cos(theta4_init)
+        y6_init = fixed_height - (L6/2) * np.sin(theta4_init)
         
-        # Link 5 should be mirrored from link 2's initial angle
-        # Bottom link 2 is at pi/2, so top link 5 should be at pi - pi/2 = pi/2 (but pointing down)
-        theta3_init = np.pi/2  # Same angle but system is inverted
-        x5_init = link6_bottom_x - (L5/2) * np.cos(theta3_init + np.pi/2) 
-        y5_init = link6_bottom_y - (L5/2) * np.sin(theta3_init + np.pi/2)
+        # Connection point between link 6 and link 5 (left end of link 6)
+        # Left end of link 6 = link6_center - (L6/2) * [cos(theta4), sin(theta4)]
+        connection_x = x6_init - (L6/2) * np.cos(theta4_init)
+        connection_y = y6_init - (L6/2) * np.sin(theta4_init)
         
-        # Top piston position (connected to bottom of link 5)
-        x4_init = 0  # Constrained to move vertically
-        y4_init = y5_init + (L5/2) * np.sin(theta3_init - np.pi/2)
+        # Link 5 positioning: its right end connects to link 6's left end
+        # Link 5 center = connection_point - (L5/2) * [cos(theta3), sin(theta3)]
+        x5_init = connection_x - (L5/2) * np.cos(theta3_init)
+        y5_init = connection_y - (L5/2) * np.sin(theta3_init)
+        
+        # Top piston positioning: connects to left end of link 5
+        # Left end of link 5 = link5_center - (L5/2) * [cos(theta3), sin(theta3)]
+        x4_init = 0  # Constrained to x = 0
+        y4_init = y5_init - (L5/2) * np.sin(theta3_init)
         
         initial_pos_top = np.array([
             x4_init, y4_init,                    # Top piston (x4, y4)
             x5_init, y5_init, theta3_init,       # Link 5 (x5, y5, theta3)
             x6_init, y6_init, theta4_init        # Link 6 (x6, y6, theta4)
         ])
+        
+        # Debug print to check positions
+        print(f"Bottom piston initial y: {initial_pos_bottom[7]:.3f}")
+        print(f"Top piston initial y: {y4_init:.3f}")
+        print(f"Initial spring length: {abs(y4_init - initial_pos_bottom[7]):.3f}")
+        print(f"Link 6 center: ({x6_init:.3f}, {y6_init:.3f})")
+        print(f"Link 5 center: ({x5_init:.3f}, {y5_init:.3f})")
         
         # Initial velocities - only driving links have initial angular velocity
         initial_vel_bottom = np.array([0, 0, self.dtheta1, 0, 0, 0, 0, 0])
